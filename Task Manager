@@ -1,0 +1,155 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import subprocess
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+class TaskManager:
+    def _init_(self, root):
+        self.root = root
+        self.root.title("Task Manager with Graphs")
+        self.root.geometry("900x600")
+
+        # Setup Treeview for processes
+        self.tree = ttk.Treeview(root, columns=("PID", "User", "CPU%", "Mem%", "Command"), show="headings")
+        self.tree.heading("PID", text="PID")
+        self.tree.heading("User", text="User")
+        self.tree.heading("CPU%", text="CPU%")
+        self.tree.heading("Mem%", text="Mem%")
+        self.tree.heading("Command", text="Command")
+        self.tree.pack(fill=tk.BOTH, expand=True)
+
+        # Button Frame
+        button_frame = tk.Frame(root)
+        button_frame.pack(pady=10)
+
+        # Refresh button
+        self.refresh_button = tk.Button(button_frame, text="Refresh", command=self.load_processes)
+        self.refresh_button.pack(side=tk.LEFT, padx=10)
+
+        # Details button
+        self.details_button = tk.Button(button_frame, text="View Details", command=self.view_details)
+        self.details_button.pack(side=tk.LEFT, padx=10)
+
+        # Create a frame for the graphs
+        self.graph_frame = tk.Frame(root)
+        self.graph_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Setup for plotting
+        self.fig, self.ax = plt.subplots(2, 1, figsize=(8, 4))
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.graph_frame)
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        self.cpu_data = []
+        self.mem_data = []
+        self.selected_pid = None
+        
+        # Bind selection event
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
+
+        # Load processes on startup
+        self.load_processes()
+        self.update_graphs()
+
+    def load_processes(self):
+        """Load and display current processes."""
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+
+        try:
+            processes = subprocess.check_output(['ps', 'aux'], text=True).splitlines()
+            for process in processes[1:]:
+                details = process.split(None, 10)
+                if len(details) > 10:
+                    pid, user, cpu, mem = details[1], details[0], details[2], details[3]
+                    command = details[10]
+                    self.tree.insert("", "end", values=(pid, user, cpu, mem, command))
+        except Exception as e:
+            self.show_error("Error loading processes", str(e))
+
+    def on_select(self, event):
+        """Handle process selection."""
+        selected_item = self.tree.selection()
+        if selected_item:
+            self.selected_pid = self.tree.item(selected_item, 'values')[0]
+            self.cpu_data.clear()
+            self.mem_data.clear()
+
+    def get_cpu_usage(self, pid):
+        """Get CPU usage for a specific process."""
+        try:
+            output = subprocess.check_output(f"ps -p {pid} -o %cpu", shell=True).decode().splitlines()
+            return float(output[1]) if len(output) > 1 else 0.0
+        except Exception as e:
+            self.show_error("Error getting CPU usage", str(e))
+            return 0.0
+
+    def get_memory_usage(self, pid):
+        """Get memory usage for a specific process."""
+        try:
+            output = subprocess.check_output(f"ps -p {pid} -o %mem", shell=True).decode().splitlines()
+            return float(output[1]) if len(output) > 1 else 0.0
+        except Exception as e:
+            self.show_error("Error getting memory usage", str(e))
+            return 0.0
+
+    def update_graphs(self):
+        """Update CPU and memory usage graphs."""
+        if self.selected_pid:
+            cpu_usage = self.get_cpu_usage(self.selected_pid)
+            mem_usage = self.get_memory_usage(self.selected_pid)
+
+            self.cpu_data.append(cpu_usage)
+            self.mem_data.append(mem_usage)
+
+            # Limit the number of data points
+            if len(self.cpu_data) > 20:
+                self.cpu_data.pop(0)
+                self.mem_data.pop(0)
+
+            # Clear previous plots
+            self.ax[0].cla()
+            self.ax[1].cla()
+
+            # Plot CPU usage
+            self.ax[0].plot(self.cpu_data, label='CPU Usage (%)', color='blue')
+            self.ax[0].set_ylim(0, 100)
+            self.ax[0].set_title(f'CPU Usage of PID {self.selected_pid} Over Time')
+            self.ax[0].legend()
+            self.ax[0].grid()
+
+            # Plot Memory usage
+            self.ax[1].plot(self.mem_data, label='Memory Usage (%)', color='green')
+            self.ax[1].set_ylim(0, 100)
+            self.ax[1].set_title(f'Memory Usage of PID {self.selected_pid} Over Time')
+            self.ax[1].legend()
+            self.ax[1].grid()
+
+            # Draw the updated plots
+            self.canvas.draw()
+
+        # Schedule the next graph update
+        self.root.after(1000, self.update_graphs)
+
+    def view_details(self):
+        """View detailed information about the selected process."""
+        selected_item = self.tree.selection()
+        if not selected_item:
+            messagebox.showwarning("Warning", "Select a process to view details.")
+            return
+
+        pid = self.tree.item(selected_item, 'values')[0]
+        try:
+            details = subprocess.check_output(f"ps -p {pid} -o pid,user,%cpu,%mem,comm,etime", shell=True).decode()
+            messagebox.showinfo("Process Details", details)
+        except Exception as e:
+            self.show_error("Error fetching process details", str(e))
+
+    def show_error(self, title, message):
+        """Display an error message."""
+        messagebox.showerror(title, message)
+
+if _name_ == "_main_":
+    root = tk.Tk()
+    app = TaskManager(root)
+    root.mainloop()
